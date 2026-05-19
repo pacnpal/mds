@@ -139,10 +139,13 @@ fn is_safe_component(name: &str) -> bool {
         return false;
     }
     // Explicit reject for chars that have path-separator meaning on either
-    // platform plus NUL. On Linux `\` is a valid filename char so
-    // Path::components() alone wouldn't catch it; we still want to refuse
-    // a name like `foo\bar` because the output may end up on an NTFS volume.
-    if name.chars().any(|c| c == '/' || c == '\\' || c == '\0') {
+    // platform plus NUL plus `:`. On Linux `\` and `:` are valid filename
+    // chars so Path::components() alone wouldn't catch them, but the
+    // extracted tree often lands on a Windows host where `\` is a path
+    // separator and `:` introduces a drive prefix. ISO9660 d-characters
+    // and Joliet d1-characters both forbid these so nothing legitimate is
+    // lost.
+    if name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0')) {
         return false;
     }
     // Use the platform path parser as a defence-in-depth check for
@@ -174,18 +177,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_windows_drive_prefixes() {
-        // `C:foo` parses as a drive-relative prefix on Windows; reject
-        // regardless of platform so a malformed disc can't smuggle one
-        // through when the extracted tree later moves to a Windows host.
-        // On Unix this is a Normal component but doesn't round-trip
-        // exactly through Path::components when interpreted on Windows;
-        // we conservatively reject anything that contains a ':' as part
-        // of the broader check. On platforms where `C:foo` parses as a
-        // Prefix, the components check catches it directly.
-        assert!(
-            !is_safe_component("C:foo") || cfg!(unix),
-            "C:foo should be rejected on Windows via Path::components"
-        );
+    fn rejects_windows_drive_prefixes_and_colons() {
+        // ISO9660 d-characters and Joliet d1-characters both forbid ':',
+        // and a colon would be interpreted as a Windows drive prefix on
+        // an NTFS extraction target. Reject unconditionally on every
+        // platform so the same disc behaves the same regardless of where
+        // it's extracted.
+        assert!(!is_safe_component("C:foo"));
+        assert!(!is_safe_component(":foo"));
+        assert!(!is_safe_component("a:b"));
     }
 }
