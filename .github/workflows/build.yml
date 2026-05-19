@@ -1,32 +1,72 @@
+name: release
+
 on:
   release:
     types: [created]
+  # Allow re-running the build for an existing release from the Actions tab.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and upload assets to (e.g. v1.1.0)"
+        required: true
 
 jobs:
-  release:
-    name: release ${{ matrix.target }}
-    runs-on: ubuntu-latest
+  upload-assets:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: write
-    if: github.event_name == 'release'
     strategy:
+      # Don't let one exotic target failing block the rest from shipping.
       fail-fast: false
       matrix:
-        target:
-          [
-            x86_64-pc-windows-gnu,
-            x86_64-unknown-linux-musl,
-            x86_64-apple-darwin,
-            wasm32-wasi,
-          ]
+        include:
+          # ---- Linux, glibc ----
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: i686-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: armv7-unknown-linux-gnueabihf, os: ubuntu-latest }
+          - { target: arm-unknown-linux-gnueabihf, os: ubuntu-latest }
+          - { target: riscv64gc-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: powerpc64le-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: s390x-unknown-linux-gnu, os: ubuntu-latest }
+          # ---- Linux, musl (static, portable across distros) ----
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: i686-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest }
+          # ---- macOS ----
+          - { target: x86_64-apple-darwin, os: macos-13 }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          # ---- Windows ----
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+          - { target: i686-pc-windows-msvc, os: windows-latest }
+          - { target: aarch64-pc-windows-msvc, os: windows-latest }
+          - { target: x86_64-pc-windows-gnu, os: windows-latest }
     steps:
-      - uses: actions/checkout@main
-      - name: Compile and release
-        uses: rust-build/rust-build.action@v1.4.3
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
         with:
-          RUSTTARGET: ${{ matrix.target }}
-          EXTRA_FILES: "README.md"
-          ARCHIVE_TYPES: ${{ matrix.archive }}
-          MINIFY: "yes"
+          # Build from the exact tagged source on both the release-event
+          # and manual workflow_dispatch paths.
+          ref: refs/tags/${{ github.event.inputs.tag || github.event.release.tag_name }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Builds the binary (using `cross` automatically for targets that need
+      # it), archives it as <bin>-<target>.{tar.gz|zip}, generates a SHA256
+      # checksum, and uploads everything to the release. Uses the runner's
+      # current stable toolchain, which reads the Cargo.lock v4 format that
+      # the old rust-build.action could not.
+      - name: Build and upload
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: mds
+          target: ${{ matrix.target }}
+          archive: $bin-$target
+          include: README.md,CHANGELOG.md
+          checksum: sha256
+          ref: refs/tags/${{ github.event.inputs.tag || github.event.release.tag_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
