@@ -7,7 +7,7 @@ use crate::{
 };
 use std::{
     fs::{self, File},
-    io::{BufWriter, Read, Seek},
+    io::{BufWriter, Read, Seek, Write},
     path::{Path, PathBuf},
 };
 
@@ -128,6 +128,10 @@ fn write_tree<R: Read + Seek>(
                 let f = File::create(&child_path).map_err(Error::Io)?;
                 let mut bw = BufWriter::new(f);
                 iso9660::copy_file(reader, &mut bw, *lba, *size)?;
+                // Explicit flush — BufWriter's Drop impl swallows write
+                // errors (e.g. ENOSPC on the final buffered chunk), so a
+                // partial write would otherwise be reported as success.
+                bw.flush().map_err(Error::Io)?;
             }
         }
     }

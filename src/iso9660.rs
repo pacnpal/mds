@@ -78,8 +78,8 @@ pub fn read_tree<R: Read + Seek>(reader: &mut R) -> Result<Vec<DirEntry>> {
         ));
     };
 
-    let mut visited = HashSet::new();
-    read_directory(reader, root_lba, root_size, encoding, &mut visited, 0)
+    let mut ancestors = HashSet::new();
+    read_directory(reader, root_lba, root_size, encoding, &mut ancestors, 0)
 }
 
 #[derive(Debug)]
@@ -199,13 +199,13 @@ enum NameEncoding {
 /// Read a directory's contents starting at `lba`, spanning `size_bytes` bytes.
 /// Recurses into subdirectories, refusing extents larger than
 /// `MAX_DIRECTORY_BYTES`, depth past `MAX_DIRECTORY_DEPTH`, or revisits of an
-/// LBA already seen in this traversal (cycle defence).
+/// LBA that's already on the current recursion stack (cycle defence).
 fn read_directory<R: Read + Seek>(
     reader: &mut R,
     lba: u32,
     size_bytes: u32,
     encoding: NameEncoding,
-    visited: &mut HashSet<u32>,
+    ancestors: &mut HashSet<u32>,
     depth: usize,
 ) -> Result<Vec<DirEntry>> {
     if depth > MAX_DIRECTORY_DEPTH {
@@ -219,11 +219,28 @@ fn read_directory<R: Read + Seek>(
              exceeds {MAX_DIRECTORY_BYTES}-byte cap"
         )));
     }
-    if !visited.insert(lba) {
+    // Track only the current recursion path. A directory whose LBA appears
+    // in our ancestor chain is a genuine cycle (A → B → A). The
+    // MAX_DIRECTORY_DEPTH cap bounds total work even if a malformed image
+    // somehow reaches the same extent via two non-overlapping paths.
+    if !ancestors.insert(lba) {
         return Err(Error::Iso9660(format!(
             "Directory cycle detected at LBA {lba}"
         )));
     }
+    let result = read_directory_body(reader, lba, size_bytes, encoding, ancestors, depth);
+    ancestors.remove(&lba);
+    result
+}
+
+fn read_directory_body<R: Read + Seek>(
+    reader: &mut R,
+    lba: u32,
+    size_bytes: u32,
+    encoding: NameEncoding,
+    ancestors: &mut HashSet<u32>,
+    depth: usize,
+) -> Result<Vec<DirEntry>> {
     let mut raw = vec![0u8; size_bytes as usize];
     seek_lba(reader, lba as u64)?;
     reader.read_exact(&mut raw).map_err(Error::Io)?;
@@ -281,6 +298,15 @@ fn read_directory<R: Read + Seek>(
             continue;
         }
 
+        // Joliet identifiers are UCS-2BE — two bytes per code unit. An odd
+        // LEN_FI would silently drop the trailing byte during decoding,
+        // potentially altering names. Refuse rather than guess.
+        if matches!(encoding, NameEncoding::Joliet) && len_fi % 2 != 0 {
+            return Err(Error::Iso9660(format!(
+                "Joliet file identifier length {len_fi} is not a multiple of 2"
+            )));
+        }
+
         let is_dir = flags & 0x02 != 0;
         let name = decode_name(raw_name, encoding, is_dir);
 
@@ -290,7 +316,7 @@ fn read_directory<R: Read + Seek>(
                 entry_lba,
                 entry_size,
                 encoding,
-                visited,
+                ancestors,
                 depth + 1,
             )?;
             EntryKind::Dir(children)
@@ -441,20 +467,41 @@ mod tests {
     }
 
     #[test]
-    fn read_directory_rejects_cycles() {
+    fn read_directory_rejects_ancestor_cycle() {
         let mut cursor = std::io::Cursor::new(vec![0u8; 4096]);
-        let mut visited = HashSet::new();
-        visited.insert(18); // pretend LBA 18 was already seen
+        let mut ancestors = HashSet::new();
+        ancestors.insert(18); // pretend LBA 18 is on the current path
         let err = read_directory(
             &mut cursor,
             18,
             2048,
             NameEncoding::Primary,
-            &mut visited,
+            &mut ancestors,
             1,
         )
         .unwrap_err();
         assert!(matches!(err, Error::Iso9660(_)));
+    }
+
+    #[test]
+    fn read_directory_ancestors_set_is_popped_on_return() {
+        // After read_directory returns, its own LBA should NOT remain in
+        // the ancestors set — otherwise a sibling directory that happens
+        // to share an extent would be misidentified as a cycle.
+        let mut cursor = std::io::Cursor::new(vec![0u8; 4 * COOKED_SECTOR_SIZE]);
+        let mut ancestors = HashSet::new();
+        // Empty dir extent (all zeroes) so the body returns immediately
+        // with no entries. We just want to verify the set is cleaned up.
+        let _ = read_directory(
+            &mut cursor,
+            1,
+            COOKED_SECTOR_SIZE as u32,
+            NameEncoding::Primary,
+            &mut ancestors,
+            0,
+        )
+        .unwrap();
+        assert!(ancestors.is_empty(), "ancestors set should be empty after return");
     }
 
     #[test]
