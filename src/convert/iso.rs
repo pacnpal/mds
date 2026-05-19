@@ -44,6 +44,9 @@ fn iso_user_data_range(mode: TrackMode, data_size: usize) -> Result<std::ops::Ra
         (Mode1, 0x800) | (Mode2Form1, 0x800) => Ok(0..0x800),
         (Mode1, 0x930) => Ok(16..16 + 0x800),
         (Mode2, 0x930) | (Mode2Form1, 0x930) => Ok(24..24 + 0x800),
+        // MODE2/2336 (XA Form 1): no 16-byte sync+header prefix, but the 8-byte
+        // XA subheader still precedes the 2048-byte user data region.
+        (Mode2, 0x920) | (Mode2Form1, 0x920) => Ok(8..8 + 0x800),
         (mode, data_size) => Err(UnknownIsoTrackSize(mode, data_size)),
     }
 }
@@ -66,6 +69,22 @@ mod tests {
         assert_eq!(
             iso_user_data_range(TrackMode::Mode2, 0x930).unwrap(),
             24..24 + 0x800
+        );
+    }
+
+    #[test]
+    fn mode2_2336_extracts_2048_user_data() {
+        assert_eq!(
+            iso_user_data_range(TrackMode::Mode2, 0x920).unwrap(),
+            8..8 + 0x800
+        );
+    }
+
+    #[test]
+    fn mode2form1_2336_extracts_2048_user_data() {
+        assert_eq!(
+            iso_user_data_range(TrackMode::Mode2Form1, 0x920).unwrap(),
+            8..8 + 0x800
         );
     }
 }
