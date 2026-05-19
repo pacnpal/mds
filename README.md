@@ -5,7 +5,9 @@ Utilities for reading and converting .mds/.mdf disk image files
 > **Fork notice:** This is a fork of [delta62/mds](https://github.com/delta62/mds).
 > It adds an `mds extract` subcommand that reads files straight out of an `.mdf`
 > without producing an intermediate ISO (Joliet-aware, with path-traversal and
-> symlink guards). The conversion and info commands are unchanged from upstream.
+> symlink guards). The ISO conversion path also carries fork fixes over upstream:
+> correct cooked-sector extraction from raw-mode tracks, MODE2/2336 (0x920)
+> handling, and seeking to the track start offset before reading.
 
 This tool converts .mdf/.mds files into .iso or .cue/.bin files. I wrote this
 since I found that `mdf2iso` was creating bad images for some discs that I

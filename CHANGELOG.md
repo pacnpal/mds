@@ -29,5 +29,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CookedSectorReader`, a 2048-byte logical-sector view over raw 2352/2336/2448
   track sectors, shared with the existing ISO conversion path.
 
+### Changed
+
+- ISO conversion (`convert --format iso`) carries fork fixes over upstream
+  `1.0.0`: extracts cooked ISO user-data from raw-mode tracks, handles the
+  MODE2/2336 (0x920) layout, and seeks to the track start offset before
+  reading. `iso_user_data_range` now lives in the shared `cooked` module so
+  conversion and extraction share one source of truth.
+
 [Unreleased]: https://github.com/pacnpal/mds/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/pacnpal/mds/releases/tag/v1.1.0
