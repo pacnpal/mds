@@ -14,10 +14,24 @@ use crate::{
     cooked::COOKED_SECTOR_SIZE,
     error::{Error, Result},
 };
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    collections::HashSet,
+    io::{Read, Seek, SeekFrom},
+};
 
 /// First volume descriptor lives at LBA 16 — the "system area" is LBAs 0..16.
 const VD_START_LBA: u64 = 16;
+
+/// Cap on bytes we'll allocate for a single directory extent. Real-world
+/// ISO9660 directories rarely exceed a few hundred KB even on large discs.
+/// Bound at 16 MiB so a malformed/malicious image can't request a multi-GB
+/// allocation and OOM the process.
+const MAX_DIRECTORY_BYTES: u32 = 16 * 1024 * 1024;
+
+/// Stack-depth limit for directory recursion. ISO9660 nominally limits depth
+/// to 8 but Joliet relaxes this; 64 is generous in practice and prevents
+/// stack overflow from a crafted image.
+const MAX_DIRECTORY_DEPTH: usize = 64;
 
 #[derive(Debug)]
 pub struct DirEntry {
@@ -64,7 +78,8 @@ pub fn read_tree<R: Read + Seek>(reader: &mut R) -> Result<Vec<DirEntry>> {
         ));
     };
 
-    read_directory(reader, root_lba, root_size, encoding)
+    let mut visited = HashSet::new();
+    read_directory(reader, root_lba, root_size, encoding, &mut visited, 0)
 }
 
 #[derive(Debug)]
@@ -160,13 +175,33 @@ enum NameEncoding {
 }
 
 /// Read a directory's contents starting at `lba`, spanning `size_bytes` bytes.
-/// Recurses into subdirectories.
+/// Recurses into subdirectories, refusing extents larger than
+/// `MAX_DIRECTORY_BYTES`, depth past `MAX_DIRECTORY_DEPTH`, or revisits of an
+/// LBA already seen in this traversal (cycle defence).
 fn read_directory<R: Read + Seek>(
     reader: &mut R,
     lba: u32,
     size_bytes: u32,
     encoding: NameEncoding,
+    visited: &mut HashSet<u32>,
+    depth: usize,
 ) -> Result<Vec<DirEntry>> {
+    if depth > MAX_DIRECTORY_DEPTH {
+        return Err(Error::Iso9660(format!(
+            "Directory nesting deeper than {MAX_DIRECTORY_DEPTH} levels"
+        )));
+    }
+    if size_bytes > MAX_DIRECTORY_BYTES {
+        return Err(Error::Iso9660(format!(
+            "Directory extent at LBA {lba} declares {size_bytes} bytes, \
+             exceeds {MAX_DIRECTORY_BYTES}-byte cap"
+        )));
+    }
+    if !visited.insert(lba) {
+        return Err(Error::Iso9660(format!(
+            "Directory cycle detected at LBA {lba}"
+        )));
+    }
     let mut raw = vec![0u8; size_bytes as usize];
     seek_lba(reader, lba as u64)?;
     reader.read_exact(&mut raw).map_err(Error::Io)?;
@@ -219,7 +254,14 @@ fn read_directory<R: Read + Seek>(
         let name = decode_name(raw_name, encoding, is_dir);
 
         let kind = if is_dir {
-            let children = read_directory(reader, entry_lba, entry_size, encoding)?;
+            let children = read_directory(
+                reader,
+                entry_lba,
+                entry_size,
+                encoding,
+                visited,
+                depth + 1,
+            )?;
             EntryKind::Dir(children)
         } else {
             EntryKind::File {
@@ -295,6 +337,40 @@ pub fn copy_file<R: Read + Seek, W: std::io::Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_directory_rejects_oversized_extent() {
+        // Need any reader — call won't get far enough to actually read.
+        let mut cursor = std::io::Cursor::new(vec![0u8; 4096]);
+        let mut visited = HashSet::new();
+        let err = read_directory(
+            &mut cursor,
+            18,
+            MAX_DIRECTORY_BYTES + 1,
+            NameEncoding::Primary,
+            &mut visited,
+            0,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Iso9660(_)));
+    }
+
+    #[test]
+    fn read_directory_rejects_cycles() {
+        let mut cursor = std::io::Cursor::new(vec![0u8; 4096]);
+        let mut visited = HashSet::new();
+        visited.insert(18); // pretend LBA 18 was already seen
+        let err = read_directory(
+            &mut cursor,
+            18,
+            2048,
+            NameEncoding::Primary,
+            &mut visited,
+            1,
+        )
+        .unwrap_err();
+        assert!(matches!(err, Error::Iso9660(_)));
+    }
 
     #[test]
     fn decode_primary_strips_version_and_dot() {

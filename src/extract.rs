@@ -99,6 +99,17 @@ fn write_tree<R: Read + Seek>(
             return Err(Error::PathEscape(entry.name.clone()));
         }
         let child_path = dest.join(&entry.name);
+        // Refuse to follow a pre-existing symlink at child_path. Without
+        // this, an attacker who can drop symlinks into the output dir
+        // (or who tricks the user into using --force on a populated dir)
+        // could redirect create_dir_all/File::create outside `dest`.
+        // symlink_metadata returns the link's own metadata, not the
+        // target's — exactly what we need here.
+        if let Ok(meta) = fs::symlink_metadata(&child_path) {
+            if meta.file_type().is_symlink() {
+                return Err(Error::PathEscape(entry.name.clone()));
+            }
+        }
         match &entry.kind {
             EntryKind::Dir(children) => {
                 fs::create_dir_all(&child_path).map_err(Error::Io)?;

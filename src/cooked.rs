@@ -129,8 +129,15 @@ impl<R: Read + Seek> Read for CookedSectorReader<R> {
         let user_start = self.user_data.start + within;
         let user_end = self.user_data.end;
         let available_in_sector = user_end - user_start;
-        let remaining_total = (total_cooked - self.logical_pos) as usize;
-        let n = min(buf.len(), min(available_in_sector, remaining_total));
+        // Do the comparison in u64 so the remaining-bytes count doesn't
+        // truncate on 32-bit pointer-width targets like wasm32-wasi for
+        // images larger than 4 GB. The final value is bounded by
+        // available_in_sector (<= 2048), so the usize cast is safe.
+        let remaining_total = total_cooked - self.logical_pos;
+        let n = min(
+            buf.len() as u64,
+            min(available_in_sector as u64, remaining_total),
+        ) as usize;
 
         buf[..n].copy_from_slice(&self.cache[user_start..user_start + n]);
         self.logical_pos += n as u64;

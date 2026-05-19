@@ -74,7 +74,7 @@ producing an intermediate iso. The default output directory is the .mds basename
 (Unicode) names are preferred when the disc has a supplementary volume
 descriptor; otherwise the primary ISO9660 names are used.
 
-```
+```bash
 mds extract my_image.mds                 # write files to ./my_image/
 mds extract my_image.mds -o out/         # write files to ./out/
 mds extract my_image.mds --list          # print the tree, write nothing
