@@ -1,7 +1,7 @@
 use crate::{
     error::{Error, Result},
     loader::load_mds,
-    mds::Track,
+    mds::{Track, TrackMode},
     util::{reader_for_track, writer_with_extension},
 };
 use std::{
@@ -22,7 +22,7 @@ pub fn convert<P: AsRef<Path>>(mds_file: P) -> Result<()> {
 
 fn track_to_iso<P: AsRef<Path>, W: Write>(track: &Track, mds_path: P, mut writer: W) -> Result<()> {
     let sector_size = track.sector_size();
-    let data_size = track.sector_data_size();
+    let sector_data = iso_user_data_range(track.mode, track.sector_data_size())?;
     let num_sectors = track.num_sectors();
     let mut reader = reader_for_track(&mds_path, track)?;
 
@@ -30,11 +30,42 @@ fn track_to_iso<P: AsRef<Path>, W: Write>(track: &Track, mds_path: P, mut writer
     for _ in 0..num_sectors {
         reader.read_exact(&mut buf).map_err(Error::Io)?;
 
-        // In order to convert the .mdf, take only the main track's data from each sector. Each
-        // sector may also contain subchannel data which is stored at the end of the sector. ISO
-        // files don't store subchannel data, so just discard this.
-        writer.write_all(&buf[0..data_size]).map_err(Error::Io)?;
+        writer.write_all(&buf[sector_data.clone()]).map_err(Error::Io)?;
     }
 
     Ok(())
+}
+
+fn iso_user_data_range(mode: TrackMode, data_size: usize) -> Result<std::ops::Range<usize>> {
+    use Error::UnknownIsoTrackSize;
+    use TrackMode::*;
+
+    match (mode, data_size) {
+        (Mode1, 0x800) | (Mode2Form1, 0x800) => Ok(0..0x800),
+        (Mode1, 0x930) => Ok(16..16 + 0x800),
+        (Mode2, 0x930) | (Mode2Form1, 0x930) => Ok(24..24 + 0x800),
+        (mode, data_size) => Err(UnknownIsoTrackSize(mode, data_size)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::iso_user_data_range;
+    use crate::mds::TrackMode;
+
+    #[test]
+    fn mode1_2352_extracts_2048_user_data() {
+        assert_eq!(
+            iso_user_data_range(TrackMode::Mode1, 0x930).unwrap(),
+            16..16 + 0x800
+        );
+    }
+
+    #[test]
+    fn mode2_2352_extracts_2048_user_data() {
+        assert_eq!(
+            iso_user_data_range(TrackMode::Mode2, 0x930).unwrap(),
+            24..24 + 0x800
+        );
+    }
 }
