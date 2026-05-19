@@ -226,6 +226,15 @@ fn read_directory<R: Read + Seek>(
                 "Directory record extends past directory data".to_string(),
             ));
         }
+        // ECMA-119 §6.8.1.1 forbids records from crossing a 2048-byte
+        // logical sector boundary. If a malformed image's len_dr would
+        // make us slice into the next sector, refuse rather than parse
+        // unrelated bytes as part of the record.
+        if (pos % COOKED_SECTOR_SIZE) + len_dr > COOKED_SECTOR_SIZE {
+            return Err(Error::Iso9660(
+                "Directory record crosses sector boundary".to_string(),
+            ));
+        }
         let rec = &raw[pos..pos + len_dr];
         pos += len_dr;
 
@@ -353,6 +362,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::Iso9660(_)));
+    }
+
+    #[test]
+    fn read_directory_rejects_records_crossing_sector_boundary() {
+        // Walk pos near the end of the first 2048-byte sector via 8
+        // chained records of length 255 (LEN_FI=0, plain files), then
+        // place a bogus 40-byte record at pos=2040 whose length would
+        // extend into the next sector. Use a 2-sector extent so the
+        // overflow vs. boundary checks are distinguishable: the record
+        // would fit in `raw` but crosses the 2048-byte boundary.
+        let mut buf = vec![0u8; 2 * COOKED_SECTOR_SIZE];
+        let mut p = 0usize;
+        for _ in 0..8 {
+            buf[p] = 255; // LEN_DR; LEN_FI defaults to 0, flags = 0
+            p += 255;
+        }
+        // pos is now 2040; place the boundary-crossing record here.
+        buf[p] = 40; // 2040 + 40 = 2080 > 2048
+
+        // Image: 18 zero sectors then our crafted directory at LBA 18.
+        let mut img = vec![0u8; 20 * COOKED_SECTOR_SIZE];
+        img[18 * COOKED_SECTOR_SIZE..18 * COOKED_SECTOR_SIZE + buf.len()].copy_from_slice(&buf);
+        let mut cursor = std::io::Cursor::new(img);
+
+        let mut visited = HashSet::new();
+        let err = read_directory(
+            &mut cursor,
+            18,
+            (2 * COOKED_SECTOR_SIZE) as u32,
+            NameEncoding::Primary,
+            &mut visited,
+            0,
+        )
+        .unwrap_err();
+        match err {
+            Error::Iso9660(msg) => assert!(msg.contains("sector boundary"), "got: {msg}"),
+            _ => panic!("expected Iso9660 error, got {err:?}"),
+        }
     }
 
     #[test]

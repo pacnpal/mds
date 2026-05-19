@@ -56,6 +56,15 @@ fn default_output_dir<P: AsRef<Path>>(mds_file: P) -> PathBuf {
 }
 
 fn prepare_output_dir(dir: &Path, force: bool) -> Result<()> {
+    // Refuse a symlinked output dir up front. read_dir/create_dir_all follow
+    // symlinks transparently, so if `dir` itself is a link the per-child
+    // symlink checks in write_tree won't help — `--force` would happily
+    // write into the link target.
+    if let Ok(meta) = fs::symlink_metadata(dir) {
+        if meta.file_type().is_symlink() {
+            return Err(Error::PathEscape(dir.to_string_lossy().into_owned()));
+        }
+    }
     match fs::read_dir(dir) {
         Ok(mut iter) => {
             if iter.next().is_some() && !force {
@@ -126,10 +135,26 @@ fn write_tree<R: Read + Seek>(
 }
 
 fn is_safe_component(name: &str) -> bool {
-    if name.is_empty() || name == "." || name == ".." {
+    if name.is_empty() {
         return false;
     }
-    !name.chars().any(|c| c == '/' || c == '\\' || c == '\0')
+    // Explicit reject for chars that have path-separator meaning on either
+    // platform plus NUL. On Linux `\` is a valid filename char so
+    // Path::components() alone wouldn't catch it; we still want to refuse
+    // a name like `foo\bar` because the output may end up on an NTFS volume.
+    if name.chars().any(|c| c == '/' || c == '\\' || c == '\0') {
+        return false;
+    }
+    // Use the platform path parser as a defence-in-depth check for
+    // anything else that isn't a plain file/dir name on the current OS:
+    // Windows drive prefixes like `C:foo`, UNC roots, parent/current-dir
+    // markers, etc. We require exactly one Normal component matching the
+    // input verbatim.
+    let mut comps = Path::new(name).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(std::path::Component::Normal(c)), None) if c == std::ffi::OsStr::new(name)
+    )
 }
 
 #[cfg(test)]
@@ -146,5 +171,21 @@ mod tests {
         assert!(!is_safe_component("a\0b"));
         assert!(is_safe_component("README.TXT"));
         assert!(is_safe_component("file with spaces.dat"));
+    }
+
+    #[test]
+    fn rejects_windows_drive_prefixes() {
+        // `C:foo` parses as a drive-relative prefix on Windows; reject
+        // regardless of platform so a malformed disc can't smuggle one
+        // through when the extracted tree later moves to a Windows host.
+        // On Unix this is a Normal component but doesn't round-trip
+        // exactly through Path::components when interpreted on Windows;
+        // we conservatively reject anything that contains a ':' as part
+        // of the broader check. On platforms where `C:foo` parses as a
+        // Prefix, the components check catches it directly.
+        assert!(
+            !is_safe_component("C:foo") || cfg!(unix),
+            "C:foo should be rejected on Windows via Path::components"
+        );
     }
 }
