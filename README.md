@@ -65,3 +65,21 @@ multi-track mdf you'll need to convert to a different format.
 
 Run `mds convert --format cue <my_image.mds>` to convert the contents of an mdf to bin
 and cue files. This format does support multiple tracks.
+
+### Extracting files
+
+Run `mds extract <my_image.mds>` to read files straight out of an mdf without
+producing an intermediate iso. The default output directory is the .mds basename
+(e.g. `PMagic_8/` for `PMagic_8.mds`); override it with `-o <DIR>`. Joliet
+(Unicode) names are preferred when the disc has a supplementary volume
+descriptor; otherwise the primary ISO9660 names are used.
+
+```
+mds extract my_image.mds                 # write files to ./my_image/
+mds extract my_image.mds -o out/         # write files to ./out/
+mds extract my_image.mds --list          # print the tree, write nothing
+mds extract my_image.mds --force         # allow writing into a non-empty dir
+```
+
+Only single-track data discs are supported. For multi-track discs, convert to
+bin/cue first.
