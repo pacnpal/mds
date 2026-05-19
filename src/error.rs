@@ -14,6 +14,7 @@ pub enum Error {
     ParseError,
     TooManySessions,
     UnknownCueTrackSize(TrackMode, usize),
+    UnknownIsoTrackSize(TrackMode, usize),
 }
 
 impl Display for Error {
@@ -30,6 +31,12 @@ impl Display for Error {
             TooManySessions => write!(f, "Cannot convert multi-session images"),
             UnknownCueTrackSize(mode, data_size) => {
                 write!(f, "Unusual track type: {mode:?} @ {data_size}")
+            }
+            UnknownIsoTrackSize(mode, data_size) => {
+                write!(
+                    f,
+                    "Cannot convert track type to ISO: {mode:?} @ {data_size}"
+                )
             }
         }
     }
