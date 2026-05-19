@@ -13,6 +13,9 @@ pub enum Command {
     /// Convert .mdf/.mds files to other formats
     Convert(ConvertArgs),
 
+    /// Extract files from an .mds/.mdf pair without producing an intermediate ISO
+    Extract(ExtractArgs),
+
     /// Print metadata contained by .mds files
     Info(InfoArgs),
 }
@@ -40,4 +43,23 @@ pub struct ConvertArgs {
     /// The format to convert into
     #[arg(long, value_enum)]
     pub format: OutputFormat,
+}
+
+#[derive(ClapArgs, Debug)]
+pub struct ExtractArgs {
+    /// Path to the .mds file to extract from
+    pub mds_file: PathBuf,
+
+    /// Directory to write extracted files to. Defaults to the .mds file's
+    /// basename (e.g. `PMagic_8/` for `PMagic_8.mds`).
+    #[arg(short = 'o', long = "output")]
+    pub output: Option<PathBuf>,
+
+    /// Print the directory tree to stdout without writing any files.
+    #[arg(long)]
+    pub list: bool,
+
+    /// Allow extracting into a non-empty output directory.
+    #[arg(long)]
+    pub force: bool,
 }
