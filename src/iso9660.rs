@@ -287,6 +287,16 @@ fn read_directory_body<R: Read + Seek>(
         let entry_lba = parse_both_endian_u32(&rec[2..10], "directory entry LBA")?;
         let entry_size = parse_both_endian_u32(&rec[10..18], "directory entry size")?;
         let flags = rec[25];
+        // Multi-Extent (0x80): the file's data is split across consecutive
+        // directory records. We don't stitch extents together, so treating
+        // such a record as a complete single-extent file would silently
+        // truncate the file. Refuse rather than corrupt. (Only matters for
+        // files near/over 4 GB, which CDs can't hold and DVDs rarely do.)
+        if flags & 0x80 != 0 {
+            return Err(Error::Iso9660(
+                "Multi-extent files are not supported".to_string(),
+            ));
+        }
         let len_fi = rec[32] as usize;
         if 33 + len_fi > rec.len() {
             continue;
@@ -426,6 +436,42 @@ mod tests {
         buf[..4].copy_from_slice(&12345u32.to_le_bytes());
         buf[4..].copy_from_slice(&99999u32.to_be_bytes());
         assert!(parse_both_endian_u32(&buf, "test").is_err());
+    }
+
+    #[test]
+    fn read_directory_rejects_multi_extent_files() {
+        // One directory record with the Multi-Extent flag (0x80) set.
+        let mut buf = vec![0u8; COOKED_SECTOR_SIZE];
+        let id = b"BIG.DAT;1";
+        let len_fi = id.len();
+        let len_dr = 33 + len_fi + if (33 + len_fi) % 2 != 0 { 1 } else { 0 };
+        buf[0] = len_dr as u8;
+        buf[2..6].copy_from_slice(&19u32.to_le_bytes());
+        buf[6..10].copy_from_slice(&19u32.to_be_bytes());
+        buf[10..14].copy_from_slice(&2048u32.to_le_bytes());
+        buf[14..18].copy_from_slice(&2048u32.to_be_bytes());
+        buf[25] = 0x80; // Multi-Extent flag
+        buf[32] = len_fi as u8;
+        buf[33..33 + len_fi].copy_from_slice(id);
+
+        let mut img = vec![0u8; 20 * COOKED_SECTOR_SIZE];
+        img[18 * COOKED_SECTOR_SIZE..18 * COOKED_SECTOR_SIZE + buf.len()].copy_from_slice(&buf);
+        let mut cursor = std::io::Cursor::new(img);
+
+        let mut ancestors = HashSet::new();
+        let err = read_directory(
+            &mut cursor,
+            18,
+            COOKED_SECTOR_SIZE as u32,
+            NameEncoding::Primary,
+            &mut ancestors,
+            0,
+        )
+        .unwrap_err();
+        match err {
+            Error::Iso9660(msg) => assert!(msg.contains("Multi-extent"), "got: {msg}"),
+            _ => panic!("expected Iso9660 error, got {err:?}"),
+        }
     }
 
     #[test]

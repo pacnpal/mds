@@ -103,17 +103,34 @@ fn prepare_output_dir(dir: &Path, force: bool) -> Result<()> {
 
 fn print_tree(entries: &[DirEntry], indent: &str) {
     for e in entries {
+        let name = sanitize_for_display(&e.name);
         match &e.kind {
             EntryKind::Dir(children) => {
-                println!("{indent}{}/", e.name);
+                println!("{indent}{name}/");
                 let next = format!("{indent}  ");
                 print_tree(children, &next);
             }
             EntryKind::File { size, .. } => {
-                println!("{indent}{}  ({size} bytes)", e.name);
+                println!("{indent}{name}  ({size} bytes)");
             }
         }
     }
+}
+
+/// Replace control characters (incl. ESC) with their `\xNN` escapes before
+/// printing a name to the terminal. A malicious image could otherwise embed
+/// escape sequences in identifiers and inject them into the terminal during
+/// `--list`. Printable Unicode (e.g. accented Joliet names) is left intact.
+fn sanitize_for_display(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_control() {
+            out.push_str(&format!("\\x{:02x}", c as u32));
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 fn write_tree<R: Read + Seek>(
@@ -217,6 +234,16 @@ mod tests {
         assert!(!is_safe_component("foo\x01bar"));
         assert!(!is_safe_component("foo\x1Fbar"));
         assert!(!is_safe_component("foo\x7Fbar"));
+    }
+
+    #[test]
+    fn sanitize_for_display_escapes_control_chars() {
+        // ESC and other control chars become visible escapes.
+        assert_eq!(sanitize_for_display("a\x1bb"), "a\\x1bb");
+        assert_eq!(sanitize_for_display("x\ny"), "x\\x0ay");
+        // Printable Unicode is preserved.
+        assert_eq!(sanitize_for_display("café.txt"), "café.txt");
+        assert_eq!(sanitize_for_display("README.TXT"), "README.TXT");
     }
 
     #[cfg(unix)]
