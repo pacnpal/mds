@@ -13,7 +13,7 @@ pub enum Command {
     /// Convert .mdf/.mds files to other formats
     Convert(ConvertArgs),
 
-    /// Extract files directly from an .mdf without producing an intermediate ISO
+    /// Extract files from an .mds/.mdf pair without producing an intermediate ISO
     Extract(ExtractArgs),
 
     /// Print metadata contained by .mds files

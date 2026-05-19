@@ -33,14 +33,12 @@ impl Display for Error {
             NoSessions => write!(f, "There are no sessions in the image"),
             OutputExists(path) => write!(
                 f,
-                "Output directory '{}' is not empty (pass --force to overwrite)",
+                "Output directory '{}' is not empty (pass --force to extract \
+                 alongside existing files; --force does not delete anything)",
                 path.display()
             ),
             ParseError => write!(f, "Error parsing mds file"),
-            PathEscape(name) => write!(
-                f,
-                "Refusing to write file with unsafe path component: '{name}'"
-            ),
+            PathEscape(name) => write!(f, "Refusing to write to unsafe path: '{name}'"),
             TooManySessions => write!(f, "Cannot convert multi-session images"),
             UnknownCueTrackSize(mode, data_size) => {
                 write!(f, "Unusual track type: {mode:?} @ {data_size}")

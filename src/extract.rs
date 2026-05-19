@@ -49,6 +49,15 @@ pub fn extract<P: AsRef<Path>>(
     Ok(())
 }
 
+fn check_not_symlink(p: &Path) -> Result<()> {
+    if let Ok(meta) = fs::symlink_metadata(p) {
+        if meta.file_type().is_symlink() {
+            return Err(Error::PathEscape(p.to_string_lossy().into_owned()));
+        }
+    }
+    Ok(())
+}
+
 fn default_output_dir<P: AsRef<Path>>(mds_file: P) -> PathBuf {
     let path = mds_file.as_ref();
     let stem = path.file_stem().unwrap_or_else(|| path.as_os_str());
@@ -56,13 +65,25 @@ fn default_output_dir<P: AsRef<Path>>(mds_file: P) -> PathBuf {
 }
 
 fn prepare_output_dir(dir: &Path, force: bool) -> Result<()> {
-    // Refuse a symlinked output dir up front. read_dir/create_dir_all follow
-    // symlinks transparently, so if `dir` itself is a link the per-child
-    // symlink checks in write_tree won't help — `--force` would happily
-    // write into the link target.
-    if let Ok(meta) = fs::symlink_metadata(dir) {
-        if meta.file_type().is_symlink() {
-            return Err(Error::PathEscape(dir.to_string_lossy().into_owned()));
+    // Refuse a symlinked output dir up front. read_dir/create_dir_all
+    // follow symlinks transparently, so without this an attacker who
+    // can drop a link into the user's workspace could redirect writes.
+    //
+    // For relative paths, walk every component — `out/subdir` where the
+    // user's `./out` is a pre-existing link to `/etc` must be caught
+    // before create_dir_all follows the link.
+    //
+    // For absolute paths, only check the leaf — the user typed the rest
+    // of the path explicitly and platform symlinks like macOS's
+    // `/var -> /private/var` or `/tmp -> /private/tmp` are inherent and
+    // not attacker-controlled.
+    if dir.is_absolute() {
+        check_not_symlink(dir)?;
+    } else {
+        let mut prefix = PathBuf::new();
+        for component in dir.components() {
+            prefix.push(component);
+            check_not_symlink(&prefix)?;
         }
     }
     match fs::read_dir(dir) {
@@ -196,6 +217,36 @@ mod tests {
         assert!(!is_safe_component("foo\x01bar"));
         assert!(!is_safe_component("foo\x1Fbar"));
         assert!(!is_safe_component("foo\x7Fbar"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_not_symlink_rejects_symlinked_path() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = std::env::temp_dir().join(format!("mds_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let real = tmp.join("real");
+        let link = tmp.join("link");
+        fs::create_dir_all(&real).unwrap();
+        symlink(&real, &link).unwrap();
+
+        // The helper rejects the symlinked path directly. Used during the
+        // prefix walk for relative output dirs and on the leaf for
+        // absolute output dirs — see prepare_output_dir.
+        let err = check_not_symlink(&link).unwrap_err();
+        assert!(
+            matches!(err, Error::PathEscape(_)),
+            "expected PathEscape, got {err:?}"
+        );
+        // And accepts a real directory.
+        assert!(check_not_symlink(&real).is_ok());
+        // And accepts a non-existent path (we only reject existing symlinks).
+        assert!(check_not_symlink(&tmp.join("does-not-exist")).is_ok());
+
+        fs::remove_dir_all(&tmp).unwrap();
     }
 
     #[test]
