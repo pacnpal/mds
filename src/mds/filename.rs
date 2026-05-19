@@ -5,7 +5,7 @@ use nom::{
     sequence::tuple,
 };
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum NameFormat {
     EightBit,
     SixteenBit,
