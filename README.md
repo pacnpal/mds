@@ -17,7 +17,7 @@ program.
 If you want to compile from source, use `cargo build` and the standard
 toolchain.
 
-Pre-built binaries are available on [the releases page](https://github.com/delta62/mds/releases).
+Pre-built binaries are available on [the releases page](https://github.com/pacnpal/mds/releases).
 
 ## Usage
 
