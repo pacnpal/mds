@@ -5,7 +5,7 @@ use crate::{
     util::{reader_for_track, writer_with_extension},
 };
 use std::{
-    io::{Read, Write},
+    io::{Read, Seek, SeekFrom, Write},
     path::Path,
 };
 
@@ -28,6 +28,12 @@ fn track_to_iso<P: AsRef<Path>, W: Write>(track: &Track, mds_path: P, mut writer
     let (data_start, data_end) = (sector_data.start, sector_data.end);
     let num_sectors = track.num_sectors();
     let mut reader = reader_for_track(&mds_path, track)?;
+    // Seek to the track's start within the .mdf so pregap/lead-in data is
+    // skipped — otherwise images with a non-zero start offset would read
+    // misaligned sectors. Mirrors mds_to_bin's behaviour.
+    reader
+        .seek(SeekFrom::Start(track.track_start_offset))
+        .map_err(Error::Io)?;
 
     let mut buf = vec![0; sector_size];
     for _ in 0..num_sectors {
