@@ -231,9 +231,19 @@ fn filename(input: Bytes, format: NameFormat) -> Res<String> {
         }
         NameFormat::SixteenBit => {
             let mut end = 0;
-            while end + 1 < input.len() && !(input[end] == 0 && input[end + 1] == 0) {
+            let terminator = loop {
+                if end + 1 >= input.len() {
+                    break None;
+                }
+                if input[end] == 0 && input[end + 1] == 0 {
+                    break Some(end);
+                }
                 end += 2;
-            }
+            };
+            let end = terminator.ok_or(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof,
+            )))?;
             let s: String = std::char::decode_utf16(
                 input[..end]
                     .chunks_exact(2)
@@ -241,7 +251,7 @@ fn filename(input: Bytes, format: NameFormat) -> Res<String> {
             )
             .map(|r| r.unwrap_or(std::char::REPLACEMENT_CHARACTER))
             .collect();
-            Ok((&input[end..], s))
+            Ok((&input[end + 2..], s))
         }
     }
 }
