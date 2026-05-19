@@ -34,7 +34,7 @@ jobs:
           - { name: mds-windows-x86_64, target: x86_64-pc-windows-msvc, os: windows-latest }
           - { name: mds-windows-aarch64, target: aarch64-pc-windows-msvc, os: windows-latest }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Build from the exact tagged source on both the release-event
           # and manual workflow_dispatch paths.
