@@ -21,12 +21,78 @@ program.
 
 ## Installation
 
-If you want to compile from source, use `cargo build` and the standard
-toolchain.
+### Pre-built binaries
 
-Pre-built binaries are available on [the releases page](https://github.com/pacnpal/mds/releases).
+Grab the archive for your platform from
+[the releases page](https://github.com/pacnpal/mds/releases). Each archive also
+contains a matching `.sha256` checksum plus this README and the changelog.
+
+| You're on | Download |
+|---|---|
+| Intel/AMD Linux | `mds-linux-x86_64.tar.gz` (or `-musl`) |
+| ARM Linux (Raspberry Pi 4/5 64-bit, ARM servers) | `mds-linux-aarch64.tar.gz` (or `-musl`) |
+| Intel Mac | `mds-macos-x86_64.tar.gz` |
+| Apple Silicon Mac (M1–M4) | `mds-macos-aarch64.tar.gz` |
+| Windows 10/11 (Intel/AMD) | `mds-windows-x86_64.zip` |
+| Windows on ARM | `mds-windows-aarch64.zip` |
+
+**glibc vs musl (Linux only):** the plain build links your system glibc — use it
+on Ubuntu/Debian/Fedora/Arch/etc. The `-musl` build is fully static (no libc
+dependency), for Alpine, minimal containers, old distros, or if the glibc build
+reports a `GLIBC_x.xx not found` mismatch. When in doubt, `-musl` always works.
+
+#### Linux
+
+```bash
+sha256sum -c mds-linux-x86_64.tar.gz.sha256   # optional integrity check
+tar xzf mds-linux-x86_64.tar.gz
+sudo install mds /usr/local/bin/              # or: chmod +x mds && ./mds info disc.mds
+```
+
+The glibc build needs glibc 2.31+ (Ubuntu 20.04 and newer); switch to `-musl` if
+you hit a version error.
+
+#### macOS
+
+```bash
+shasum -a 256 -c mds-macos-aarch64.tar.gz.sha256
+tar xzf mds-macos-aarch64.tar.gz
+xattr -d com.apple.quarantine mds             # clear Gatekeeper quarantine (see below)
+./mds info disc.mds
+```
+
+These binaries aren't code-signed or notarized, so on first run macOS will say
+*"mds cannot be opened because the developer cannot be verified."* Clear it with
+the `xattr -d com.apple.quarantine ./mds` shown above, or via Finder →
+right-click the binary → **Open** → **Open** (only needed once). Apple Silicon
+Macs can run the `x86_64` build under Rosetta, but use `mds-macos-aarch64` for
+native speed.
+
+#### Windows
+
+```powershell
+Expand-Archive mds-windows-x86_64.zip
+.\mds-windows-x86_64\mds.exe info disc.mds
+```
+
+- It's a command-line tool: run it from PowerShell or `cmd`, not by
+  double-clicking.
+- SmartScreen may warn about the unsigned exe — click **More info → Run anyway**.
+- The build needs the Visual C++ Redistributable, present on essentially all
+  Windows 10/11 systems. If you see `VCRUNTIME140.dll missing` on a bare install,
+  grab the [latest VC++ redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+  (`vc_redist.arm64.exe` on ARM).
+
+### Building from source
+
+Use `cargo build --release` with the standard toolchain; the binary lands at
+`target/release/mds`.
 
 ## Usage
+
+Every command takes the `.mds` file as its argument and expects the matching
+`.mdf` data file alongside it (same basename, e.g. `disc.mds` + `disc.mdf`). The
+`.mds` is only the metadata; the `.mdf` holds the actual disc contents.
 
 ### Printing mds metadata
 
