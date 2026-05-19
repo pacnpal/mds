@@ -23,6 +23,9 @@ pub fn convert<P: AsRef<Path>>(mds_file: P) -> Result<()> {
 fn track_to_iso<P: AsRef<Path>, W: Write>(track: &Track, mds_path: P, mut writer: W) -> Result<()> {
     let sector_size = track.sector_size();
     let sector_data = iso_user_data_range(track.mode, track.sector_data_size())?;
+    // Hoist start/end out of the per-sector loop so we don't clone the Range
+    // hundreds of thousands of times on large discs.
+    let (data_start, data_end) = (sector_data.start, sector_data.end);
     let num_sectors = track.num_sectors();
     let mut reader = reader_for_track(&mds_path, track)?;
 
@@ -30,7 +33,9 @@ fn track_to_iso<P: AsRef<Path>, W: Write>(track: &Track, mds_path: P, mut writer
     for _ in 0..num_sectors {
         reader.read_exact(&mut buf).map_err(Error::Io)?;
 
-        writer.write_all(&buf[sector_data.clone()]).map_err(Error::Io)?;
+        writer
+            .write_all(&buf[data_start..data_end])
+            .map_err(Error::Io)?;
     }
 
     Ok(())
