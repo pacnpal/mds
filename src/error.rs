@@ -28,7 +28,7 @@ impl Display for Error {
             Io(err) => write!(f, "{err}"),
             Iso9660(msg) => write!(f, "ISO9660: {msg}"),
             MissingInputFile => write!(f, "No input file provided to read data from"),
-            MultiTrackNotSupported => write!(f, "Multi track conversion not yet supported"),
+            MultiTrackNotSupported => write!(f, "Multi-track discs are not yet supported"),
             NoDataTracks => write!(f, "There are no data tracks in this mdf"),
             NoSessions => write!(f, "There are no sessions in the image"),
             OutputExists(path) => write!(
