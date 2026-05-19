@@ -138,14 +138,21 @@ fn is_safe_component(name: &str) -> bool {
     if name.is_empty() {
         return false;
     }
-    // Explicit reject for chars that have path-separator meaning on either
-    // platform plus NUL plus `:`. On Linux `\` and `:` are valid filename
-    // chars so Path::components() alone wouldn't catch them, but the
-    // extracted tree often lands on a Windows host where `\` is a path
-    // separator and `:` introduces a drive prefix. ISO9660 d-characters
-    // and Joliet d1-characters both forbid these so nothing legitimate is
-    // lost.
-    if name.chars().any(|c| matches!(c, '/' | '\\' | ':' | '\0')) {
+    // Explicit reject for chars that are either path-meaningful on some
+    // platform or forbidden by the Windows filename rules + ASCII control
+    // chars. ISO9660 d-characters and Joliet d1-characters forbid all of
+    // these, so a legitimately-authored disc will never trip this check
+    // — only malformed/malicious metadata will.
+    //
+    // Note: this does NOT reject Windows reserved device names like CON,
+    // NUL, COM1, etc. Real discs essentially never contain those, and a
+    // case-insensitive-with-extension blocklist is a much larger change
+    // for marginal benefit. Users extracting on Linux/macOS who then move
+    // files to Windows will hit OS-level failures for those rare cases.
+    if name
+        .chars()
+        .any(|c| matches!(c, '/' | '\\' | ':' | '\0' | '*' | '?' | '"' | '<' | '>' | '|' | '\x01'..='\x1F' | '\x7F'))
+    {
         return false;
     }
     // Use the platform path parser as a defence-in-depth check for
@@ -174,6 +181,17 @@ mod tests {
         assert!(!is_safe_component("a\0b"));
         assert!(is_safe_component("README.TXT"));
         assert!(is_safe_component("file with spaces.dat"));
+    }
+
+    #[test]
+    fn rejects_windows_reserved_chars_and_control_chars() {
+        for c in ['*', '?', '"', '<', '>', '|'] {
+            let s = format!("foo{c}bar");
+            assert!(!is_safe_component(&s), "expected rejection of {s:?}");
+        }
+        assert!(!is_safe_component("foo\x01bar"));
+        assert!(!is_safe_component("foo\x1Fbar"));
+        assert!(!is_safe_component("foo\x7Fbar"));
     }
 
     #[test]

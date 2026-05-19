@@ -141,11 +141,14 @@ fn parse_supplementary(sector: &[u8]) -> Result<VolDesc> {
     let (root_lba, root_size) = parse_root_record(root_record)?;
     // Escape Sequences: 32 bytes at offset 88 (§8.5.6). Joliet defines:
     // 25/2F/40 (level 1), 25/2F/43 (level 2), 25/2F/45 (level 3)
-    // i.e. "%/" followed by '@', 'C', or 'E'.
+    // i.e. "%/" followed by '@', 'C', or 'E'. Per the Joliet spec the
+    // sequence sits at the START of the escape field — don't scan with a
+    // sliding window, or non-Joliet SVDs whose escape bytes happen to
+    // contain `%/E` later would be mis-decoded as UCS-2.
     let escape = &sector[88..88 + 32];
-    let joliet = escape.windows(3).any(|w| {
-        w[0] == 0x25 && w[1] == 0x2F && (w[2] == 0x40 || w[2] == 0x43 || w[2] == 0x45)
-    });
+    let joliet = escape[0] == 0x25
+        && escape[1] == 0x2F
+        && matches!(escape[2], 0x40 | 0x43 | 0x45);
     Ok(VolDesc::Supplementary {
         joliet,
         root_lba,
@@ -163,9 +166,28 @@ fn parse_root_record(rec: &[u8]) -> Result<(u32, u32)> {
     if rec.len() < 18 {
         return Err(Error::Iso9660("Root directory record truncated".to_string()));
     }
-    let lba = u32::from_le_bytes([rec[2], rec[3], rec[4], rec[5]]);
-    let size = u32::from_le_bytes([rec[10], rec[11], rec[12], rec[13]]);
+    let lba = parse_both_endian_u32(&rec[2..10], "root LBA")?;
+    let size = parse_both_endian_u32(&rec[10..18], "root size")?;
     Ok((lba, size))
+}
+
+/// Parse one of ISO9660's "both-endian" u32 fields (4 bytes LE followed by
+/// 4 bytes BE encoding the same value). Errors if the two halves disagree —
+/// that's a sign of a malformed image or a parser bug worth surfacing.
+fn parse_both_endian_u32(field: &[u8], context: &str) -> Result<u32> {
+    if field.len() < 8 {
+        return Err(Error::Iso9660(format!(
+            "{context}: both-endian field truncated"
+        )));
+    }
+    let le = u32::from_le_bytes([field[0], field[1], field[2], field[3]]);
+    let be = u32::from_be_bytes([field[4], field[5], field[6], field[7]]);
+    if le != be {
+        return Err(Error::Iso9660(format!(
+            "{context}: both-endian halves disagree ({le} LE vs {be} BE)"
+        )));
+    }
+    Ok(le)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -245,8 +267,8 @@ fn read_directory<R: Read + Seek>(
         if rec.len() < 33 {
             continue;
         }
-        let entry_lba = u32::from_le_bytes([rec[2], rec[3], rec[4], rec[5]]);
-        let entry_size = u32::from_le_bytes([rec[10], rec[11], rec[12], rec[13]]);
+        let entry_lba = parse_both_endian_u32(&rec[2..10], "directory entry LBA")?;
+        let entry_size = parse_both_endian_u32(&rec[10..18], "directory entry size")?;
         let flags = rec[25];
         let len_fi = rec[32] as usize;
         if 33 + len_fi > rec.len() {
@@ -362,6 +384,22 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, Error::Iso9660(_)));
+    }
+
+    #[test]
+    fn parse_both_endian_u32_matches() {
+        let mut buf = [0u8; 8];
+        buf[..4].copy_from_slice(&12345u32.to_le_bytes());
+        buf[4..].copy_from_slice(&12345u32.to_be_bytes());
+        assert_eq!(parse_both_endian_u32(&buf, "test").unwrap(), 12345);
+    }
+
+    #[test]
+    fn parse_both_endian_u32_rejects_disagreement() {
+        let mut buf = [0u8; 8];
+        buf[..4].copy_from_slice(&12345u32.to_le_bytes());
+        buf[4..].copy_from_slice(&99999u32.to_be_bytes());
+        assert!(parse_both_endian_u32(&buf, "test").is_err());
     }
 
     #[test]
@@ -486,7 +524,9 @@ mod tests {
             // "." entry: LEN_DR=34, file id length=1, id=0x00
             s[p] = 34;
             s[p + 2..p + 6].copy_from_slice(&18u32.to_le_bytes());
+            s[p + 6..p + 10].copy_from_slice(&18u32.to_be_bytes());
             s[p + 10..p + 14].copy_from_slice(&2048u32.to_le_bytes());
+            s[p + 14..p + 18].copy_from_slice(&2048u32.to_be_bytes());
             s[p + 25] = 0x02;
             s[p + 32] = 1;
             s[p + 33] = 0x00;
@@ -495,7 +535,9 @@ mod tests {
             // ".." entry: LEN_DR=34, file id length=1, id=0x01
             s[p] = 34;
             s[p + 2..p + 6].copy_from_slice(&18u32.to_le_bytes());
+            s[p + 6..p + 10].copy_from_slice(&18u32.to_be_bytes());
             s[p + 10..p + 14].copy_from_slice(&2048u32.to_le_bytes());
+            s[p + 14..p + 18].copy_from_slice(&2048u32.to_be_bytes());
             s[p + 25] = 0x02;
             s[p + 32] = 1;
             s[p + 33] = 0x01;
@@ -508,7 +550,9 @@ mod tests {
             let len_dr = 33 + len_fi + if (33 + len_fi) % 2 != 0 { 1 } else { 0 };
             s[p] = len_dr as u8;
             s[p + 2..p + 6].copy_from_slice(&19u32.to_le_bytes());
+            s[p + 6..p + 10].copy_from_slice(&19u32.to_be_bytes());
             s[p + 10..p + 14].copy_from_slice(&(payload.len() as u32).to_le_bytes());
+            s[p + 14..p + 18].copy_from_slice(&(payload.len() as u32).to_be_bytes());
             // flags = 0 (regular file)
             s[p + 32] = len_fi as u8;
             s[p + 33..p + 33 + len_fi].copy_from_slice(id);
@@ -557,7 +601,9 @@ mod tests {
         // Minimal root record at offset 156: LEN_DR=34, LBA=20, size=2048.
         sector[156] = 34;
         sector[158..162].copy_from_slice(&20u32.to_le_bytes());
+        sector[162..166].copy_from_slice(&20u32.to_be_bytes());
         sector[166..170].copy_from_slice(&2048u32.to_le_bytes());
+        sector[170..174].copy_from_slice(&2048u32.to_be_bytes());
         let vd = parse_supplementary(&sector).unwrap();
         match vd {
             VolDesc::Supplementary {
