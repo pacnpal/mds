@@ -6,6 +6,7 @@ use nom::{
 };
 
 #[derive(Debug)]
+#[derive(Clone, Copy)]
 pub enum NameFormat {
     EightBit,
     SixteenBit,
