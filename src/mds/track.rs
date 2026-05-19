@@ -181,8 +181,20 @@ pub fn track(input: Bytes, track_offset: usize) -> Res<Track> {
     };
 
     let filename = if filename_offset > 0 {
-        let filename_block = filename_block(&input[filename_offset as usize..])?.1;
-        Some(filename(&input[filename_block.filename_offset as usize..], filename_block.filename_format)?.1)
+        let filename_block_input = input
+            .get(filename_offset as usize..)
+            .ok_or(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof,
+            )))?;
+        let filename_block = filename_block(filename_block_input)?.1;
+        let filename_input = input
+            .get(filename_block.filename_offset as usize..)
+            .ok_or(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof,
+            )))?;
+        Some(filename(filename_input, filename_block.filename_format)?.1)
     } else {
         None
     };
@@ -219,15 +231,27 @@ fn filename(input: Bytes, format: NameFormat) -> Res<String> {
         }
         NameFormat::SixteenBit => {
             let mut end = 0;
-            while end + 1 < input.len() && !(input[end] == 0 && input[end + 1] == 0) {
+            let terminator = loop {
+                if end + 1 >= input.len() {
+                    break None;
+                }
+                if input[end] == 0 && input[end + 1] == 0 {
+                    break Some(end);
+                }
                 end += 2;
-            }
-            let units: Vec<u16> = input[..end]
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect();
-            let s = String::from_utf16_lossy(&units);
-            Ok((&input[end..], s))
+            };
+            let end = terminator.ok_or(nom::Err::Error(nom::error::Error::new(
+                input,
+                nom::error::ErrorKind::Eof,
+            )))?;
+            let s: String = char::decode_utf16(
+                input[..end]
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]])),
+            )
+            .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
+            .collect();
+            Ok((&input[end + 2..], s))
         }
     }
 }
