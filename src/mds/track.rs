@@ -244,12 +244,12 @@ fn filename(input: Bytes, format: NameFormat) -> Res<String> {
                 input,
                 nom::error::ErrorKind::Eof,
             )))?;
-            let s: String = std::char::decode_utf16(
+            let s: String = char::decode_utf16(
                 input[..end]
                     .chunks_exact(2)
                     .map(|c| u16::from_le_bytes([c[0], c[1]])),
             )
-            .map(|r| r.unwrap_or(std::char::REPLACEMENT_CHARACTER))
+            .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))
             .collect();
             Ok((&input[end + 2..], s))
         }
